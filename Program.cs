@@ -130,27 +130,41 @@ namespace windows_hosts_writer
                 if (message.Actor.Attributes["type"] == "nat")
                 {
                     var containerId = message.Actor.Attributes["container"];
-                    var response = GetClient().Containers.InspectContainerAsync(containerId).Result;
-                    var networks = response.NetworkSettings.Networks;
-                    EndpointSettings network = null;
-                    if (networks.TryGetValue("nat", out network))
-                    {
-                        var hostsLines = new List<string>();
-                        using (StreamReader reader = new StreamReader(hostsFileStream))
-                        using (StreamWriter writer = new StreamWriter(hostsFileStream))
+                    try {
+                        var response = GetClient().Containers.InspectContainerAsync(containerId).Result;
+                        var networks = response.NetworkSettings.Networks;
+                        EndpointSettings network = null;
+                        if (networks.TryGetValue("nat", out network))
                         {
-                            while (!reader.EndOfStream)
-                                hostsLines.Add(reader.ReadLine());
+                            var hostsLines = new List<string>();
+                            using (StreamReader reader = new StreamReader(hostsFileStream))
+                            using (StreamWriter writer = new StreamWriter(hostsFileStream))
+                            {
+                                while (!reader.EndOfStream)
+                                    hostsLines.Add(reader.ReadLine());
 
-                            hostsFileStream.Position = 0;
-                            var removed = hostsLines.RemoveAll(l => l.EndsWith($"#{containerId} by whw"));
+                                hostsFileStream.Position = 0;
+                                var removed = hostsLines.RemoveAll(l => l.EndsWith($"#{containerId} by whw"));
 
-                            if (add)
-                                hostsLines.Add($"{network.IPAddress}\t{response.Config.Hostname}\t\t#{containerId} by whw");
+                                if (add)
+                                    hostsLines.Add($"{network.IPAddress}\t{response.Config.Hostname}\t\t#{containerId} by whw");
 
-                            foreach (var line in hostsLines)
-                                writer.WriteLine(line);
-                            hostsFileStream.SetLength(hostsFileStream.Position);
+                                foreach (var line in hostsLines)
+                                    writer.WriteLine(line);
+                                hostsFileStream.SetLength(hostsFileStream.Position);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        if (_debug)
+                        {
+                            Console.WriteLine("Something went wrong. Maybe looking for a container that is already gone? Exception is " + ex.Message);
+                            Console.WriteLine(ex.StackTrace);
+                            if (ex.InnerException != null)
+                            {
+                                Console.WriteLine();
+                                Console.WriteLine("InnerException is " + ex.InnerException.Message);
+                                Console.WriteLine(ex.InnerException.StackTrace);
+                            }
                         }
                     }
                 }
