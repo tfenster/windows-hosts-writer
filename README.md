@@ -1,4 +1,10 @@
 # windows-hosts-writer
+
+###Updated: 12-17-19
+- Allows for configuration of the network to monitor.  Set the "network" environment variable
+- Adds the docker compose service name (for better user experience)
+
+
 Small tool that monitors the Docker engine and modifies the hosts file on Windows to allow easier networking
 
 You can run this natively as well but as you need to have Docker running anyways to use it, the easiest way is:
