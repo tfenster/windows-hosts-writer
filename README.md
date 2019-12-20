@@ -1,6 +1,6 @@
 # windows-hosts-writer
 
-###Updated: 12-17-19
+### Updated: 12-17-19
 - Allows for configuration of the network to monitor.  Set the "network" environment variable
 - Adds the docker compose service name (for better user experience)
 

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Docker.DotNet;
@@ -154,19 +155,32 @@ namespace windows_hosts_writer
                                     hostsLines.Add(reader.ReadLine());
 
                                 hostsFileStream.Position = 0;
-                                var removed = hostsLines.RemoveAll(l => l.EndsWith($"#{containerId} by whw"));
-                                var hostnames = response.Config.Hostname;
+                                
+                                hostsLines.RemoveAll(l => l.EndsWith($"#{containerId} by whw"));
+                                
+                                var hostNames = new List<string> {response.Config.Hostname};
 
                                 if (response.Config.Labels.ContainsKey("com.docker.compose.service"))
                                 {
-                                    hostnames += $" {response.Config.Labels["com.docker.compose.service"]}";
+                                    hostNames.Add(response.Config.Labels["com.docker.compose.service"]);
                                 }
 
+                                hostNames.AddRange(network.Aliases);
+
+                                var allHosts = string.Join(" ", hostNames.Distinct());
+
                                 if (add)
-                                    hostsLines.Add($"{network.IPAddress}\t{hostnames}\t\t#{containerId} by whw");
+                                {
+                                    var hostLine = $"{network.IPAddress}\t{allHosts}\t\t#{containerId} by whw";
+                                    
+                                    Console.WriteLine("Adding Hosts Line: " + hostLine);
+
+                                    hostsLines.Add(hostLine);
+                                }
 
                                 foreach (var line in hostsLines)
                                     writer.WriteLine(line);
+
                                 hostsFileStream.SetLength(hostsFileStream.Position);
                             }
                         }
