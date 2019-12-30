@@ -40,13 +40,14 @@ namespace windows_hosts_writer
                 {
                     if (_debug)
                         Console.WriteLine(EVENT_MSG, "connect", message.Actor.Attributes["container"]);
-                    HandleHosts(true, message);
+
+                    HandleHosts(true, message.Actor.Attributes["type"], message.Actor.Attributes["container"]);
                 }
                 else if (message.Action == "disconnect")
                 {
                     if (_debug)
                         Console.WriteLine(EVENT_MSG, "disconnect", message.Actor.Attributes["container"]);
-                    HandleHosts(false, message);
+                    HandleHosts(false, message.Actor.Attributes["type"], message.Actor.Attributes["container"]);
                 }
             });
 
@@ -76,8 +77,29 @@ namespace windows_hosts_writer
                     }
             };
 
+            var containerListParams = new ContainersListParameters()
+            {
+                Filters = new Dictionary<string, IDictionary<string, bool>>()
+                {
+                    {
+                        "status", new Dictionary<string, bool>()
+                        {
+                            {"running", true }
+                        }
+                    }
+                }
+            };
+
             try
             {
+                //Handle already running containers on the network
+                var containers = GetClient().Containers.ListContainersAsync(containerListParams).Result;
+
+                foreach (var container in containers)
+                {
+                    HandleHosts(true, "nat", container.ID);
+                }
+
                 GetClient().System.MonitorEventsAsync(containerEventsParams, progress, default(CancellationToken)).Wait();
             }
             catch (Exception ex)
@@ -99,7 +121,7 @@ namespace windows_hosts_writer
             }
         }
 
-        private static void HandleHosts(bool add, Message message)
+        private static void HandleHosts(bool add, string networkType, string containerId)
         {
             FileStream hostsFileStream = null;
             try
@@ -137,15 +159,14 @@ namespace windows_hosts_writer
                         tryCount++;
                     }
                 }
-                if (message.Actor.Attributes["type"] == "nat")
+                if (networkType == "nat")
                 {
-                    var containerId = message.Actor.Attributes["container"];
                     try
                     {
                         var response = GetClient().Containers.InspectContainerAsync(containerId).Result;
                         var networks = response.NetworkSettings.Networks;
-                        EndpointSettings network = null;
-                        if (networks.TryGetValue(LISTEN_NETWORK, out network))
+
+                        if (networks.TryGetValue(LISTEN_NETWORK, out var network))
                         {
                             var hostsLines = new List<string>();
                             using (StreamReader reader = new StreamReader(hostsFileStream))
@@ -155,10 +176,10 @@ namespace windows_hosts_writer
                                     hostsLines.Add(reader.ReadLine());
 
                                 hostsFileStream.Position = 0;
-                                
+
                                 hostsLines.RemoveAll(l => l.EndsWith($"#{containerId} by whw"));
-                                
-                                var hostNames = new List<string> {response.Config.Hostname};
+
+                                var hostNames = new List<string> { response.Config.Hostname };
 
                                 if (response.Config.Labels.ContainsKey("com.docker.compose.service"))
                                 {
@@ -172,7 +193,7 @@ namespace windows_hosts_writer
                                 if (add)
                                 {
                                     var hostLine = $"{network.IPAddress}\t{allHosts}\t\t#{containerId} by whw";
-                                    
+
                                     Console.WriteLine("Adding Hosts Line: " + hostLine);
 
                                     hostsLines.Add(hostLine);
