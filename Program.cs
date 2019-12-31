@@ -2,84 +2,87 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Timers;
 using Docker.DotNet;
 using Docker.DotNet.Models;
+using Timer = System.Threading.Timer;
 
 namespace windows_hosts_writer
 {
     class Program
     {
+        //Settings
         private const string ENV_ENDPOINT = "endpoint";
         private const string ENV_NETWORK = "network";
         private const string ENV_HOSTPATH = "hosts_path";
-        private const string ERROR_HOSTPATH = "could not change hosts file at {0} inside of the container. You can change that path through environment variable " + ENV_HOSTPATH;
-        private const string EVENT_MSG = "got a {0} event from {1}";
+
         private static string LISTEN_NETWORK = "nat";
         private static DockerClient _client;
-        private static bool _silent = false;
+        private static bool _silent;
+
+        private static Dictionary<string, string> _hostsEntries = new Dictionary<string, string>();
+        private static bool _isDirty = true;
+        private static Timer _timer;
+        private static readonly object _lockobject = new object();
+
+        [DllImport("Kernel32")]
+        internal static extern bool SetConsoleCtrlHandler(HandlerRoutine handler, bool Add);
+
+        internal delegate bool HandlerRoutine(CtrlTypes ctrlType);
+
+        internal enum CtrlTypes
+        {
+            CTRL_C_EVENT = 0,
+            CTRL_BREAK_EVENT,
+            CTRL_CLOSE_EVENT,
+            CTRL_LOGOFF_EVENT = 5,
+            CTRL_SHUTDOWN_EVENT
+        }
 
         static void Main(string[] args)
         {
+            if (Environment.GetEnvironmentVariable("silent") != null)
+            {
+                _silent = true;
+            }
 
             if (Environment.GetEnvironmentVariable(ENV_NETWORK) != null)
             {
                 LISTEN_NETWORK = Environment.GetEnvironmentVariable(ENV_NETWORK);
             }
 
-            if (Environment.GetEnvironmentVariable("silent") != null)
+            try
             {
-                _silent = true;
+                _client = GetClient();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Something went wrong. Likely the Docker engine is not listening at [{_client.Configuration.EndpointBaseUri}] inside of the container.");
+                Console.WriteLine("You can change that path through environment variable " + ENV_ENDPOINT);
+
+                Console.WriteLine("Exception is " + ex.Message);
+                Console.WriteLine(ex.StackTrace);
+
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("InnerException is " + ex.InnerException.Message);
+                    Console.WriteLine(ex.InnerException.StackTrace);
+                }
+
             }
 
-            if (!_silent)
-                Console.WriteLine($"Starting Windows hosts writer on network [{LISTEN_NETWORK}]");
+            Console.WriteLine($"Starting Windows hosts writer on network [{LISTEN_NETWORK}]");
 
-
-            var progress = new Progress<Message>(message =>
-            {
-                if (message.Action == "connect")
-                {
-                    if (!_silent)
-                        Console.WriteLine(EVENT_MSG, "connect", message.Actor.Attributes["container"]);
-
-                    HandleHosts(true, message.Actor.Attributes["type"], message.Actor.Attributes["container"]);
-                }
-                else if (message.Action == "disconnect")
-                {
-                    if (!_silent)
-                        Console.WriteLine(EVENT_MSG, "disconnect", message.Actor.Attributes["container"]);
-
-                    HandleHosts(false, message.Actor.Attributes["type"], message.Actor.Attributes["container"]);
-                }
-            });
-
-            var containerEventsParams = new ContainerEventsParameters()
-            {
-                Filters = new Dictionary<string, IDictionary<string, bool>>()
-                    {
-                        {
-                            "event", new Dictionary<string, bool>()
-                            {
-                                {
-                                    "connect", true
-                                },
-                                {
-                                    "disconnect", true
-                                }
-                            }
-                        },
-                        {
-                            "type", new Dictionary<string, bool>()
-                            {
-                                {
-                                    "network", true
-                                }
-                            }
-                        }
-                    }
-            };
+            //Give us some closure
+            //AppDomain.CurrentDomain.ProcessExit += (eSender, eArgs) => { Exit(); };
+            // AssemblyLoadContext.Default.Unloading += (eContext) => { Exit(); };
 
             var containerListParams = new ContainersListParameters()
             {
@@ -88,7 +91,7 @@ namespace windows_hosts_writer
                     {
                         "status", new Dictionary<string, bool>()
                         {
-                            {"running", true }
+                            {"running", true}
                         }
                     }
                 }
@@ -96,155 +99,181 @@ namespace windows_hosts_writer
 
             try
             {
-                //Handle already running containers on the network
-                var containers = GetClient().Containers.ListContainersAsync(containerListParams).Result;
-
-                foreach (var container in containers)
+                _timer = new Timer((s) =>
                 {
-                    if (!_silent)
-                        Console.WriteLine($"Adding existing container: {container.ID}");
+                    _hostsEntries = new Dictionary<string, string>();
 
-                    HandleHosts(true, "nat", container.ID);
-                }
+                    //Handle already running containers on the network
+                    var containers = _client.Containers.ListContainersAsync(containerListParams).Result;
 
-                GetClient().System.MonitorEventsAsync(containerEventsParams, progress, default(CancellationToken)).Wait();
+                    foreach (var container in containers)
+                    {
+                        if (ShouldProcessContainer(container.ID))
+                            AddHost(container.ID);
+                    }
+
+                    WriteHosts(null);
+
+                }, null, 1000, 5000);
+
+                var shutdown = new ManualResetEvent(false);
+                var complete = new ManualResetEventSlim();
+                var hr = new HandlerRoutine(type =>
+                {
+                    Console.WriteLine($"ConsoleCtrlHandler got signal: {type}");
+
+                    shutdown.Set();
+                    complete.Wait();
+
+                    return false;
+                });
+
+                SetConsoleCtrlHandler(hr, true);
+
+              
+                shutdown.WaitOne();
+
+                Console.WriteLine("Stopping server...");
+
+                Exit();
+
+                complete.Set();
+
+                GC.KeepAlive(hr);
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Something went wrong. Likely the Docker engine is not listening at " + GetClient().Configuration.EndpointBaseUri.ToString() + " inside of the container.");
-                Console.WriteLine("You can change that path through environment variable " + ENV_ENDPOINT);
-                if (!_silent)
+                Console.WriteLine($"Unhandled Exception: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+
+                if (ex.InnerException != null)
                 {
-                    Console.WriteLine("Exception is " + ex.Message);
-                    Console.WriteLine(ex.StackTrace);
-
-                    if (ex.InnerException != null)
-                    {
-                        Console.WriteLine();
-                        Console.WriteLine("InnerException is " + ex.InnerException.Message);
-                        Console.WriteLine(ex.InnerException.StackTrace);
-                    }
+                    Console.WriteLine();
+                    Console.WriteLine("InnerException is " + ex.InnerException.Message);
+                    Console.WriteLine(ex.InnerException.StackTrace);
                 }
-
             }
         }
 
-        private static void HandleHosts(bool add, string networkType, string containerId)
+
+        public static bool ShouldProcessContainer(string containerId)
         {
-            FileStream hostsFileStream = null;
             try
             {
+                var response = _client.Containers.InspectContainerAsync(containerId).Result;
 
-                while (hostsFileStream == null)
-                {
-                    int tryCount = 0;
-                    var hostsPath = Environment.GetEnvironmentVariable(ENV_HOSTPATH) ?? "c:\\driversetc\\hosts";
+                var networks = response.NetworkSettings.Networks;
 
-                    try
-                    {
-                        hostsFileStream = File.Open(hostsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
-                    }
-                    catch (FileNotFoundException)
-                    {
-                        // no access to hosts
-                        Console.WriteLine(ERROR_HOSTPATH, hostsPath);
-                        return;
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        // no access to hosts
-                        Console.WriteLine(ERROR_HOSTPATH, hostsPath);
-                        return;
-                    }
-                    catch (IOException ex)
-                    {
-                        if (tryCount == 5)
-                        {
-                            Console.WriteLine(ERROR_HOSTPATH, hostsPath);
-                            return;  // only try five times and then give up
-                        }
-                        Thread.Sleep(1000);
-                        tryCount++;
-                    }
-                }
-                if (networkType == "nat")
-                {
-                    try
-                    {
-                        var response = GetClient().Containers.InspectContainerAsync(containerId).Result;
-                        var networks = response.NetworkSettings.Networks;
+                return networks.TryGetValue(LISTEN_NETWORK, out var network);
 
-                        if (networks.TryGetValue(LISTEN_NETWORK, out var network))
-                        {
-                            var hostsLines = new List<string>();
-                            using (StreamReader reader = new StreamReader(hostsFileStream))
-                            using (StreamWriter writer = new StreamWriter(hostsFileStream))
-                            {
-                                while (!reader.EndOfStream)
-                                    hostsLines.Add(reader.ReadLine());
-
-                                hostsFileStream.Position = 0;
-
-                                hostsLines.RemoveAll(l => l.EndsWith($"#{containerId} by whw"));
-
-                                var hostNames = new List<string> { response.Config.Hostname };
-
-                                if (response.Config.Labels.ContainsKey("com.docker.compose.service"))
-                                {
-                                    hostNames.Add(response.Config.Labels["com.docker.compose.service"]);
-                                }
-
-                                hostNames.AddRange(network.Aliases);
-
-                                var allHosts = string.Join(" ", hostNames.Distinct());
-
-                                if (add)
-                                {
-                                    var hostLine = $"{network.IPAddress}\t{allHosts}\t\t#{containerId} by whw";
-
-                                    Console.WriteLine("Adding Hosts Line: " + hostLine);
-
-                                    hostsLines.Add(hostLine);
-                                }
-
-                                foreach (var line in hostsLines)
-                                    writer.WriteLine(line);
-
-                                hostsFileStream.SetLength(hostsFileStream.Position);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        if (!_silent)
-                        {
-                            Console.WriteLine("Something went wrong. Maybe looking for a container that is already gone? Exception is " + ex.Message);
-                            Console.WriteLine(ex.StackTrace);
-                            if (ex.InnerException != null)
-                            {
-                                Console.WriteLine();
-                                Console.WriteLine("InnerException is " + ex.InnerException.Message);
-                                Console.WriteLine(ex.InnerException.StackTrace);
-                            }
-                        }
-                    }
-                }
             }
-            finally
+            catch (Exception e)
             {
-                if (hostsFileStream != null)
-                    hostsFileStream.Dispose();
+                Console.WriteLine($"Error Checking ShouldProcess: {e.Message}");
+                return false;
             }
         }
+
+        public static void AddHost(string containerId)
+        {
+            if (!_hostsEntries.ContainsKey(containerId))
+            {
+                _hostsEntries.Add(containerId, GetHostsValue(containerId));
+                _isDirty = true;
+                return;
+            }
+
+            var hostsValue = GetHostsValue(containerId);
+
+            if (_hostsEntries[containerId] != hostsValue)
+            {
+                _hostsEntries[containerId] = hostsValue;
+                _isDirty = true;
+            }
+        }
+
+
+        private static string GetHostsValue(string containerId)
+        {
+            var containerDetails = _client.Containers.InspectContainerAsync(containerId).Result;
+
+            var network = containerDetails.NetworkSettings.Networks[LISTEN_NETWORK];
+
+            var hostNames = new List<string> { containerDetails.Config.Hostname };
+
+            hostNames.AddRange(network.Aliases);
+
+            var allHosts = string.Join(" ", hostNames.Distinct());
+
+            return $"{network.IPAddress}\t{allHosts}\t\t#{containerId} by whw";
+        }
+
+        private static void WriteHosts(object state)
+        {
+            //Keep some sanity and don't jack with things while in flux.
+            lock (_lockobject)
+            {
+                //Do what we need, only when we need to.
+                if (!_isDirty)
+                    return;
+
+                _isDirty = false;
+
+                var hostsPath = Environment.GetEnvironmentVariable(ENV_HOSTPATH) ?? "c:\\driversetc\\hosts";
+
+                if (!File.Exists(hostsPath))
+                {
+                    Console.WriteLine($"Could not find hosts file at: {hostsPath}");
+
+                }
+
+                var hostsLines = File.ReadAllLines(hostsPath).ToList();
+
+                var newHostLines = new List<string>();
+
+                //Purge the old ones out
+                hostsLines.ForEach(l =>
+                {
+                    if (!l.EndsWith($"whw"))
+                    {
+                        newHostLines.Add(l);
+                    }
+                });
+
+                //Add the new ones in
+                foreach (var entry in _hostsEntries)
+                {
+                    newHostLines.Add(entry.Value);
+                }
+
+                File.WriteAllLines(hostsPath, newHostLines);
+            }
+        }
+
+
+        public static void Exit()
+        {
+            Console.WriteLine("Graceful exit");
+
+            if (_timer != null)
+            {
+                _timer.Dispose();
+
+                _hostsEntries = new Dictionary<string, string>();
+                _isDirty = true;
+                WriteHosts(null);
+                _timer = null;
+            }
+        }
+
+
+        private static object LO = new object();
 
         private static DockerClient GetClient()
         {
-            if (_client == null)
-            {
-                var endpoint = Environment.GetEnvironmentVariable(ENV_ENDPOINT) ?? "npipe://./pipe/docker_engine";
-                _client = new DockerClientConfiguration(new System.Uri(endpoint)).CreateClient();
-            }
-            return _client;
+            var endpoint = Environment.GetEnvironmentVariable(ENV_ENDPOINT) ?? "npipe://./pipe/docker_engine";
+
+            return new DockerClientConfiguration(new Uri(endpoint)).CreateClient();
         }
     }
 }
