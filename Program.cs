@@ -18,35 +18,39 @@ namespace windows_hosts_writer
         private const string EVENT_MSG = "got a {0} event from {1}";
         private static string LISTEN_NETWORK = "nat";
         private static DockerClient _client;
-        private static bool _debug = false;
+        private static bool _silent = false;
 
         static void Main(string[] args)
         {
-            if (Environment.GetEnvironmentVariable("debug") != null)
-            {
-                _debug = true;
-                Console.WriteLine("Starting Windows hosts writer");
-            }
 
             if (Environment.GetEnvironmentVariable(ENV_NETWORK) != null)
             {
                 LISTEN_NETWORK = Environment.GetEnvironmentVariable(ENV_NETWORK);
             }
 
+            if (Environment.GetEnvironmentVariable("silent") != null)
+            {
+                _silent = true;
+            }
+
+            if (!_silent)
+                Console.WriteLine($"Starting Windows hosts writer on network [{LISTEN_NETWORK}]");
+
 
             var progress = new Progress<Message>(message =>
             {
                 if (message.Action == "connect")
                 {
-                    if (_debug)
+                    if (!_silent)
                         Console.WriteLine(EVENT_MSG, "connect", message.Actor.Attributes["container"]);
 
                     HandleHosts(true, message.Actor.Attributes["type"], message.Actor.Attributes["container"]);
                 }
                 else if (message.Action == "disconnect")
                 {
-                    if (_debug)
+                    if (!_silent)
                         Console.WriteLine(EVENT_MSG, "disconnect", message.Actor.Attributes["container"]);
+
                     HandleHosts(false, message.Actor.Attributes["type"], message.Actor.Attributes["container"]);
                 }
             });
@@ -97,6 +101,9 @@ namespace windows_hosts_writer
 
                 foreach (var container in containers)
                 {
+                    if (!_silent)
+                        Console.WriteLine($"Adding existing container: {container.ID}");
+
                     HandleHosts(true, "nat", container.ID);
                 }
 
@@ -106,10 +113,11 @@ namespace windows_hosts_writer
             {
                 Console.WriteLine("Something went wrong. Likely the Docker engine is not listening at " + GetClient().Configuration.EndpointBaseUri.ToString() + " inside of the container.");
                 Console.WriteLine("You can change that path through environment variable " + ENV_ENDPOINT);
-                if (_debug)
+                if (!_silent)
                 {
                     Console.WriteLine("Exception is " + ex.Message);
                     Console.WriteLine(ex.StackTrace);
+
                     if (ex.InnerException != null)
                     {
                         Console.WriteLine();
@@ -208,7 +216,7 @@ namespace windows_hosts_writer
                     }
                     catch (Exception ex)
                     {
-                        if (_debug)
+                        if (!_silent)
                         {
                             Console.WriteLine("Something went wrong. Maybe looking for a container that is already gone? Exception is " + ex.Message);
                             Console.WriteLine(ex.StackTrace);

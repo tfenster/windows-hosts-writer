@@ -1,6 +1,4 @@
-#escape=`
-ARG BASE_IMAGE
-FROM $BASE_IMAGE
+FROM mcr.microsoft.com/dotnet/core/runtime:3.1
 
 COPY  ./app ./app
 WORKDIR /app
