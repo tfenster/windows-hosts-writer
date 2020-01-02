@@ -1,5 +1,10 @@
 # windows-hosts-writer
 
+### Updated: 1-1-20
+- Allows for per-session running
+- Upgraded .net core to 3.1
+- Switched from events to timered updates to work better with docker-compose
+
 ### Updated: 12-17-19
 - Allows for configuration of the network to monitor.  Set the "network" environment variable
 - Adds the docker compose service name (for better user experience)
