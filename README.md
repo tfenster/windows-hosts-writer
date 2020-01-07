@@ -1,5 +1,8 @@
 # windows-hosts-writer
 
+### Updated: 1-2-20
+- Added arg for the base image to support other OS Versions
+
 ### Updated: 1-1-20
 - Allows for per-session running
 - Upgraded .net core to 3.1

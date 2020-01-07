@@ -1,4 +1,6 @@
-FROM microsoft/dotnet:2.2-sdk-nanoserver-1809 AS build
+ARG BASE_IMAGE
+
+FROM $BASE_IMAGE AS build
 WORKDIR /src
 COPY ["windows-hosts-writer.csproj", "./"]
 RUN dotnet restore "./windows-hosts-writer.csproj"

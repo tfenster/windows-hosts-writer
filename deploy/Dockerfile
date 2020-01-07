@@ -1,4 +1,6 @@
-FROM mcr.microsoft.com/dotnet/core/runtime:3.1
+ARG BASE_IMAGE
+
+FROM $BASE_IMAGE 
 
 COPY  ./app ./app
 WORKDIR /app
