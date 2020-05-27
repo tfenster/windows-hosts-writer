@@ -1,5 +1,13 @@
 # windows-hosts-writer
 
+### Updated: 5-27-20
+- Added ability to terminate containers to a single container such as traefik.  
+
+Environment variable name: "TERMINATION_MAP" 
+Value: server1,server2:server3 
+
+(The IP of Server 3 will be used for both server 1 and 2)
+
 ### Updated: 5-26-20
 - No longer need to pass in environment variable for the network. If you don't, it'll list to all networks by default.
 

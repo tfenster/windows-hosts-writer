@@ -21,6 +21,8 @@ namespace windows_hosts_writer
         private const string ENV_NETWORK = "network";
         private const string ENV_HOSTPATH = "hosts_path";
         private const string ENV_SESSION = "session_id";
+        private const string ENV_TERMMAP = "termination_map";
+
         private const string CONST_ANYNET = "ANY_NETWORK";
         //Client used to read the container details
         private static DockerClient _client;
@@ -43,6 +45,7 @@ namespace windows_hosts_writer
         //Our time used for sync
         private static Timer _timer;
 
+        private static Dictionary<string, string> _termMaps = new Dictionary<string, string>();
 
 
         //  Due to how windows container handle the terminate events in windows, there's
@@ -86,6 +89,38 @@ namespace windows_hosts_writer
             {
                 _sessionId = Environment.GetEnvironmentVariable(ENV_SESSION);
                 Console.Write($"Overriding Session Key  '{_sessionId}'");
+            }
+
+            if (Environment.GetEnvironmentVariable(ENV_TERMMAP) != null)
+            {
+                var mapValue = Environment.GetEnvironmentVariable(ENV_TERMMAP);
+
+                var mapSets = mapValue.Split('|');
+
+                foreach (var mapGroup in mapSets)
+                {
+                    var mapSet = mapGroup.Split(":");
+
+                    if (mapSet.Length != 2)
+                    {
+                        Console.WriteLine($"Malformed MapSet: '{ mapGroup}'. Expected 'source1,source2:dest'.");
+                        continue;
+                    }
+
+                    var mapDest = mapSet[1].Trim();
+
+                    foreach (string mapSource in mapSet[0].Split(",", StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToList())
+                    {
+                        if (_termMaps.ContainsKey(mapSource))
+                        {
+                            Console.WriteLine($"Skipping DUplicate Source Map '{mapSource}'");
+                            continue;
+                        }
+                        _termMaps.Add(mapSource.ToLower(), mapDest.ToLower());
+                    }
+                }
+
+                Console.Write($"Using {_termMaps.Count} termination maps.");
             }
 
             try
@@ -218,14 +253,19 @@ namespace windows_hosts_writer
         {
             lock (_hostLock)
             {
+                var hostsValue = GetHostsValue(containerId);
+
+                if (string.IsNullOrWhiteSpace(hostsValue))
+                    return;
+
                 if (!_hostsEntries.ContainsKey(containerId))
                 {
-                    _hostsEntries.Add(containerId, GetHostsValue(containerId));
+
+                    _hostsEntries.Add(containerId, hostsValue);
                     _isDirty = true;
+
                     return;
                 }
-
-                var hostsValue = GetHostsValue(containerId);
 
                 if (_hostsEntries[containerId] != hostsValue)
                 {
@@ -247,11 +287,14 @@ namespace windows_hosts_writer
 
             var hostNames = new List<string> { containerDetails.Config.Hostname };
 
+            var IP = "";
+
             EndpointSettings network = null;
 
+            //If we care about the actual network or not
             if (_listenNetwork == CONST_ANYNET)
             {
-                foreach(var key in containerDetails.NetworkSettings.Networks.Keys)
+                foreach (var key in containerDetails.NetworkSettings.Networks.Keys)
                 {
                     network = containerDetails.NetworkSettings.Networks[key];
 
@@ -268,13 +311,63 @@ namespace windows_hosts_writer
 
             }
 
-            var allHosts = string.Join(" ", hostNames.Distinct());
+            //Filter these out
+            hostNames = hostNames.Distinct().ToList();
 
-            return $"{network.IPAddress}\t{allHosts}\t\t#{containerId} by {GetTail()}";
+            //Did we map this elsewhere?
+            var hasMap = false;
 
+            foreach (var hostName in hostNames)
+            {
+                if (_termMaps.ContainsKey(hostName))
+                {
+                    var destName = _termMaps[hostName];
+
+                    var allContainers = _client.Containers.ListContainersAsync(new ContainersListParameters()).Result;
+
+                    foreach (var matchContainer in allContainers)
+                    {
+                        var keys = GetContainerNames(matchContainer);
+
+                        if (keys.Contains(destName))
+                        {
+                            IP = matchContainer.NetworkSettings.Networks[matchContainer.NetworkSettings.Networks.First().Key].IPAddress;
+
+                            if (hasMap)
+                                break;
+                        }
+
+                    }
+                }
+            }
+
+            //Didn't find anything, we're good!
+            if (string.IsNullOrEmpty(IP))
+                IP = network.IPAddress;
+
+            var allHosts = string.Join(" ", hostNames);
+
+            return $"{IP}\t{allHosts}\t\t#{containerId} by {GetTail()}";
         }
 
         private static readonly object _lockobject = new object();
+
+        private static List<string> GetContainerNames(ContainerListResponse responseObject)
+        {
+            var names = new List<string>();
+            foreach (var matchNetwork in responseObject.NetworkSettings.Networks)
+            {
+                if (matchNetwork.Value.Aliases == null)
+                    continue;
+
+                names.AddRange(matchNetwork.Value.Aliases);
+            }
+
+            if (responseObject.Labels.ContainsKey("com.docker.compose.service"))
+                names.Add(responseObject.Labels["com.docker.compose.service"]);
+
+            return names.Select(p => p.ToLower()).Distinct().ToList();
+        }
 
         /// <summary>
         /// Actually write the hosts file, only when dirty.
