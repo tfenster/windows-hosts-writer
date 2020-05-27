@@ -2,15 +2,10 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Loader;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Timers;
 using Docker.DotNet;
 using Docker.DotNet.Models;
-using Timer = System.Threading.Timer;
 
 namespace windows_hosts_writer
 {
@@ -28,7 +23,11 @@ namespace windows_hosts_writer
         private static DockerClient _client;
 
         //Listening to a specific network
+<<<<<<< HEAD
         private static string _listenNetwork = CONST_ANYNET;
+=======
+        private static string _listenNetwork = "nat";
+>>>>>>> b29a3a6ccacde81c77e2434013023b7917a203a8
 
         //Location of the hosts file IN the container.  Mapped through a volume share to your hosts file
         private static string _hostsPath = "c:\\driversetc\\hosts";
@@ -43,9 +42,13 @@ namespace windows_hosts_writer
         private static string _sessionId = "";
 
         //Our time used for sync
-        private static Timer _timer;
+        private static System.Timers.Timer _timer;
 
+<<<<<<< HEAD
         private static Dictionary<string, string> _termMaps = new Dictionary<string, string>();
+=======
+        private static int _timerPeriod = 10000;
+>>>>>>> b29a3a6ccacde81c77e2434013023b7917a203a8
 
 
         //  Due to how windows container handle the terminate events in windows, there's
@@ -129,25 +132,82 @@ namespace windows_hosts_writer
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
+                Log(
                     $"Something went wrong. Likely the Docker engine is not listening at [{_client.Configuration.EndpointBaseUri}] inside of the container.");
-                Console.WriteLine($"You can change that path through environment variable '{ENV_ENDPOINT}'");
+                Log($"You can change that path through environment variable '{ENV_ENDPOINT}'");
 
-                Console.WriteLine("Exception is " + ex.Message);
-                Console.WriteLine(ex.StackTrace);
+                Log("Exception is " + ex.Message);
+                Log(ex.StackTrace);
 
                 if (ex.InnerException != null)
                 {
-                    Console.WriteLine();
-                    Console.WriteLine("InnerException is " + ex.InnerException.Message);
-                    Console.WriteLine(ex.InnerException.StackTrace);
+                    Log("InnerException is " + ex.InnerException.Message);
+                    Log(ex.InnerException.StackTrace);
                 }
 
                 //Exit Gracefully
                 return;
             }
 
-            Console.WriteLine($"Starting Windows Hosts Writer");
+            Log("Starting Windows Hosts Writer");
+
+
+
+            try
+            {
+                _timer = new System.Timers.Timer(_timerPeriod);
+
+                _timer.Elapsed +=  (s, e)=>{ DoUpdate();} ;
+
+                _timer.Start();
+                //_timer = new Timer((s) => DoUpdate(), null, 0, _timerPeriod);
+
+                var shutdown = new ManualResetEvent(false);
+                var complete = new ManualResetEventSlim();
+                var hr = new HandlerRoutine(type =>
+                {
+                    Log($"ConsoleCtrlHandler got signal: {type}");
+
+                    shutdown.Set();
+                    complete.Wait();
+
+                    return false;
+                });
+
+                SetConsoleCtrlHandler(hr, true);
+
+                //Hold here until we get that shutdown event
+                shutdown.WaitOne();
+
+                Log("Stopping server...");
+
+                Exit();
+
+                complete.Set();
+
+                GC.KeepAlive(hr);
+            }
+            catch (Exception ex)
+            {
+                Log($"Unhandled Exception: {ex.Message}");
+                Log(ex.StackTrace);
+
+                if (ex.InnerException != null)
+                {
+                    Log("InnerException is " + ex.InnerException.Message);
+                    Log(ex.InnerException.StackTrace);
+                }
+            }
+        }
+
+        private static void _timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            throw new NotImplementedException();
+        }
+
+        public static void DoUpdate()
+        {
+            _timer.Stop();
 
             //We want to only find running containers
             var containerListParams = new ContainersListParameters()
@@ -163,62 +223,23 @@ namespace windows_hosts_writer
                 }
             };
 
-            try
+            lock (_hostsEntries)
             {
-                _timer = new Timer((s) =>
-                {
-                    _hostsEntries = new Dictionary<string, string>();
-
-                    //Handle already running containers on the network
-                    var containers = _client.Containers.ListContainersAsync(containerListParams).Result;
-
-                    foreach (var container in containers)
-                    {
-                        if (ShouldProcessContainer(container.ID))
-                            AddHost(container.ID);
-                    }
-
-                    WriteHosts();
-
-                }, null, 1000, 5000);
-
-                var shutdown = new ManualResetEvent(false);
-                var complete = new ManualResetEventSlim();
-                var hr = new HandlerRoutine(type =>
-                {
-                    Console.WriteLine($"ConsoleCtrlHandler got signal: {type}");
-
-                    shutdown.Set();
-                    complete.Wait();
-
-                    return false;
-                });
-
-                SetConsoleCtrlHandler(hr, true);
-
-                //Hold here until we get that shutdown event
-                shutdown.WaitOne();
-
-                Console.WriteLine("Stopping server...");
-
-                Exit();
-
-                complete.Set();
-
-                GC.KeepAlive(hr);
+                _hostsEntries = new Dictionary<string, string>();
             }
-            catch (Exception ex)
+
+            //Handle already running containers on the network
+            var containers = _client.Containers.ListContainersAsync(containerListParams).Result;
+
+            foreach (var container in containers)
             {
-                Console.WriteLine($"Unhandled Exception: {ex.Message}");
-                Console.WriteLine(ex.StackTrace);
-
-                if (ex.InnerException != null)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine("InnerException is " + ex.InnerException.Message);
-                    Console.WriteLine(ex.InnerException.StackTrace);
-                }
+                if (ShouldProcessContainer(container.ID))
+                    AddHost(container.ID);
             }
+
+            WriteHosts();
+            
+            _timer.Start();
         }
 
         //Checks whether the container needs to be added to the list or not.  Has to be on the right network
@@ -238,7 +259,7 @@ namespace windows_hosts_writer
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Error Checking ShouldProcess: {e.Message}");
+                Log($"Error Checking ShouldProcess: {e.Message}");
                 return false;
             }
         }
@@ -251,6 +272,7 @@ namespace windows_hosts_writer
         /// <param name="containerId">The ID of the container to add</param>
         public static void AddHost(string containerId)
         {
+<<<<<<< HEAD
             lock (_hostLock)
             {
                 var hostsValue = GetHostsValue(containerId);
@@ -267,6 +289,19 @@ namespace windows_hosts_writer
                     return;
                 }
 
+=======
+            lock (_hostsEntries)
+            {
+                if (!_hostsEntries.ContainsKey(containerId))
+                {
+                    _hostsEntries.Add(containerId, GetHostsValue(containerId));
+                    _isDirty = true;
+                    return;
+                }
+
+                var hostsValue = GetHostsValue(containerId);
+
+>>>>>>> b29a3a6ccacde81c77e2434013023b7917a203a8
                 if (_hostsEntries[containerId] != hostsValue)
                 {
                     _hostsEntries[containerId] = hostsValue;
@@ -387,7 +422,7 @@ namespace windows_hosts_writer
 
                 if (!File.Exists(_hostsPath))
                 {
-                    Console.WriteLine($"Could not find hosts file at: {_hostsPath}");
+                    Log($"Could not find hosts file at: {_hostsPath}");
                     return;
                 }
 
@@ -428,7 +463,7 @@ namespace windows_hosts_writer
         /// </summary>
         public static void Exit()
         {
-            Console.WriteLine("Graceful exit");
+            Log("Graceful exit");
 
             _timer.Dispose();
 
@@ -442,6 +477,11 @@ namespace windows_hosts_writer
             var endpoint = Environment.GetEnvironmentVariable(ENV_ENDPOINT) ?? "npipe://./pipe/docker_engine";
 
             return new DockerClientConfiguration(new Uri(endpoint)).CreateClient();
+        }
+
+        private static void Log(string text)
+        {
+            Console.WriteLine($"{DateTime.Now:HH:mm:ss:fff}: {text}");
         }
     }
 }
