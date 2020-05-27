@@ -23,11 +23,7 @@ namespace windows_hosts_writer
         private static DockerClient _client;
 
         //Listening to a specific network
-<<<<<<< HEAD
         private static string _listenNetwork = CONST_ANYNET;
-=======
-        private static string _listenNetwork = "nat";
->>>>>>> b29a3a6ccacde81c77e2434013023b7917a203a8
 
         //Location of the hosts file IN the container.  Mapped through a volume share to your hosts file
         private static string _hostsPath = "c:\\driversetc\\hosts";
@@ -44,11 +40,8 @@ namespace windows_hosts_writer
         //Our time used for sync
         private static System.Timers.Timer _timer;
 
-<<<<<<< HEAD
         private static Dictionary<string, string> _termMaps = new Dictionary<string, string>();
-=======
         private static int _timerPeriod = 10000;
->>>>>>> b29a3a6ccacde81c77e2434013023b7917a203a8
 
 
         //  Due to how windows container handle the terminate events in windows, there's
@@ -272,7 +265,6 @@ namespace windows_hosts_writer
         /// <param name="containerId">The ID of the container to add</param>
         public static void AddHost(string containerId)
         {
-<<<<<<< HEAD
             lock (_hostLock)
             {
                 var hostsValue = GetHostsValue(containerId);
@@ -289,19 +281,6 @@ namespace windows_hosts_writer
                     return;
                 }
 
-=======
-            lock (_hostsEntries)
-            {
-                if (!_hostsEntries.ContainsKey(containerId))
-                {
-                    _hostsEntries.Add(containerId, GetHostsValue(containerId));
-                    _isDirty = true;
-                    return;
-                }
-
-                var hostsValue = GetHostsValue(containerId);
-
->>>>>>> b29a3a6ccacde81c77e2434013023b7917a203a8
                 if (_hostsEntries[containerId] != hostsValue)
                 {
                     _hostsEntries[containerId] = hostsValue;
