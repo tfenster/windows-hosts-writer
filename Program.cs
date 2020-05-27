@@ -21,22 +21,22 @@ namespace windows_hosts_writer
         private const string ENV_NETWORK = "network";
         private const string ENV_HOSTPATH = "hosts_path";
         private const string ENV_SESSION = "session_id";
-
+        private const string CONST_ANYNET = "ANY_NETWORK";
         //Client used to read the container details
         private static DockerClient _client;
 
         //Listening to a specific network
-        private static string _listenNetwork = "nat";
-        
+        private static string _listenNetwork = CONST_ANYNET;
+
         //Location of the hosts file IN the container.  Mapped through a volume share to your hosts file
         private static string _hostsPath = "c:\\driversetc\\hosts";
 
         //All host file entries we're tracking
         private static Dictionary<string, string> _hostsEntries = new Dictionary<string, string>();
-        
+
         //Flag to track whether or not to actually update the hosts file
         private static bool _isDirty = true;
-        
+
         //Uniquely identify records created by this. Allows for simultaneous execution
         private static string _sessionId = "";
 
@@ -76,6 +76,10 @@ namespace windows_hosts_writer
             {
                 _listenNetwork = Environment.GetEnvironmentVariable(ENV_NETWORK);
                 Console.Write($"Overriding listen network '{_listenNetwork}'");
+            }
+            else
+            {
+                Console.WriteLine("Listening to any network");
             }
 
             if (Environment.GetEnvironmentVariable(ENV_SESSION) != null)
@@ -187,6 +191,9 @@ namespace windows_hosts_writer
         {
             try
             {
+                if (_listenNetwork == CONST_ANYNET)
+                    return true;
+
                 var response = _client.Containers.InspectContainerAsync(containerId).Result;
 
                 var networks = response.NetworkSettings.Networks;
@@ -201,25 +208,30 @@ namespace windows_hosts_writer
             }
         }
 
+        private static readonly object _hostLock = new object();
+
         /// <summary>
         /// Adds the hosts entry to the list for writing later
         /// </summary>
         /// <param name="containerId">The ID of the container to add</param>
         public static void AddHost(string containerId)
         {
-            if (!_hostsEntries.ContainsKey(containerId))
+            lock (_hostLock)
             {
-                _hostsEntries.Add(containerId, GetHostsValue(containerId));
-                _isDirty = true;
-                return;
-            }
+                if (!_hostsEntries.ContainsKey(containerId))
+                {
+                    _hostsEntries.Add(containerId, GetHostsValue(containerId));
+                    _isDirty = true;
+                    return;
+                }
 
-            var hostsValue = GetHostsValue(containerId);
+                var hostsValue = GetHostsValue(containerId);
 
-            if (_hostsEntries[containerId] != hostsValue)
-            {
-                _hostsEntries[containerId] = hostsValue;
-                _isDirty = true;
+                if (_hostsEntries[containerId] != hostsValue)
+                {
+                    _hostsEntries[containerId] = hostsValue;
+                    _isDirty = true;
+                }
             }
         }
 
@@ -233,15 +245,33 @@ namespace windows_hosts_writer
         {
             var containerDetails = _client.Containers.InspectContainerAsync(containerId).Result;
 
-            var network = containerDetails.NetworkSettings.Networks[_listenNetwork];
-
             var hostNames = new List<string> { containerDetails.Config.Hostname };
 
-            hostNames.AddRange(network.Aliases);
+            EndpointSettings network = null;
+
+            if (_listenNetwork == CONST_ANYNET)
+            {
+                foreach(var key in containerDetails.NetworkSettings.Networks.Keys)
+                {
+                    network = containerDetails.NetworkSettings.Networks[key];
+
+                    if (network.Aliases != null)
+                        hostNames.AddRange(network.Aliases);
+                }
+            }
+            else
+            {
+                network = containerDetails.NetworkSettings.Networks[_listenNetwork];
+
+                if (network.Aliases != null)
+                    hostNames.AddRange(network.Aliases);
+
+            }
 
             var allHosts = string.Join(" ", hostNames.Distinct());
 
             return $"{network.IPAddress}\t{allHosts}\t\t#{containerId} by {GetTail()}";
+
         }
 
         private static readonly object _lockobject = new object();
@@ -261,7 +291,7 @@ namespace windows_hosts_writer
                 //Keep from repeating
                 _isDirty = false;
 
-               
+
                 if (!File.Exists(_hostsPath))
                 {
                     Console.WriteLine($"Could not find hosts file at: {_hostsPath}");

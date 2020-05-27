@@ -1,5 +1,8 @@
 # windows-hosts-writer
 
+### Updated: 5-26-20
+- No longer need to pass in environment variable for the network. If you don't, it'll list to all networks by default.
+
 ### Updated: 1-2-20
 - Added arg for the base image to support other OS Versions
 
