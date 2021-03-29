@@ -1,4 +1,29 @@
 # windows-hosts-writer
+
+### Updated: 5-27-20
+- Added ability to terminate containers to a single container such as traefik.  
+
+Environment variable name: "TERMINATION_MAP" 
+Value: server1,server2:server3 
+
+(The IP of Server 3 will be used for both server 1 and 2)
+
+### Updated: 5-26-20
+- No longer need to pass in environment variable for the network. If you don't, it'll list to all networks by default.
+
+### Updated: 1-2-20
+- Added arg for the base image to support other OS Versions
+
+### Updated: 1-1-20
+- Allows for per-session running
+- Upgraded .net core to 3.1
+- Switched from events to timered updates to work better with docker-compose
+
+### Updated: 12-17-19
+- Allows for configuration of the network to monitor.  Set the "network" environment variable
+- Adds the docker compose service name (for better user experience)
+
+
 Small tool that monitors the Docker engine and modifies the hosts file on Windows to allow easier networking
 
 You can run this natively as well but as you need to have Docker running anyways to use it, the easiest way is:
