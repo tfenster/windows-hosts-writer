@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using Docker.DotNet;
 using Docker.DotNet.Models;
@@ -19,6 +20,7 @@ namespace windows_hosts_writer
         private const string ENV_TERMMAP = "termination_map";
 
         private const string CONST_ANYNET = "ANY_NETWORK";
+
         //Client used to read the container details
         private static DockerClient _client;
 
@@ -29,10 +31,10 @@ namespace windows_hosts_writer
         private static string _hostsPath = "c:\\driversetc\\hosts";
 
         //All host file entries we're tracking
-        private static Dictionary<string, string> _hostsEntries = new Dictionary<string, string>();
+        private static Dictionary<string, List<string>> _hostsEntries = new Dictionary<string, List<string>>();
 
-        //Flag to track whether or not to actually update the hosts file
-        private static bool _isDirty = true;
+        //Current Hash of the HostsEntries, stops the spammy updates to hosts file
+        private static int _hostsHash = -1;
 
         //Uniquely identify records created by this. Allows for simultaneous execution
         private static string _sessionId = "";
@@ -87,10 +89,10 @@ namespace windows_hosts_writer
                 Console.Write($"Overriding Session Key  '{_sessionId}'");
             }
 
-            if (Environment.GetEnvironmentVariable(ENV_TERMMAP) != null)
+            if (Environment.GetEnvironmentVariable(ENV_TERMMAP) != null || true)
             {
                 var mapValue = Environment.GetEnvironmentVariable(ENV_TERMMAP);
-
+                mapValue = "id,cm,cd:traefik";
                 var mapSets = mapValue.Split('|');
 
                 foreach (var mapGroup in mapSets)
@@ -150,7 +152,7 @@ namespace windows_hosts_writer
             {
                 _timer = new System.Timers.Timer(_timerPeriod);
 
-                _timer.Elapsed +=  (s, e)=>{ DoUpdate();} ;
+                _timer.Elapsed += (s, e) => { DoUpdate(); };
 
                 _timer.Start();
                 //_timer = new Timer((s) => DoUpdate(), null, 0, _timerPeriod);
@@ -218,7 +220,7 @@ namespace windows_hosts_writer
 
             lock (_hostsEntries)
             {
-                _hostsEntries = new Dictionary<string, string>();
+                _hostsEntries = new Dictionary<string, List<string>>();
             }
 
             //Handle already running containers on the network
@@ -227,22 +229,47 @@ namespace windows_hosts_writer
             foreach (var container in containers)
             {
                 if (ShouldProcessContainer(container.ID))
-                    AddHost(container.ID);
+                    AddHost(container);
             }
 
-            WriteHosts();
-            
+            var hash = HostsHashGen();
+            if (hash != _hostsHash)
+            {
+                WriteHosts();
+                _hostsHash = hash;
+            }
+
             _timer.Start();
+        }
+
+        private static int HostsHashGen()
+        {
+            var valueHash = new StringBuilder();
+
+            var sortedKeys = _hostsEntries.Keys.OrderBy(s => s);
+
+            foreach (var key in sortedKeys)
+            {
+                valueHash.Append(key);
+
+                var sortedVals = _hostsEntries[key].OrderBy(s => s);
+
+                foreach (var val in sortedVals)
+                {
+                    valueHash.Append(val);
+                }
+            }
+            return valueHash.ToString().GetHashCode();
         }
 
         //Checks whether the container needs to be added to the list or not.  Has to be on the right network
         public static bool ShouldProcessContainer(string containerId)
         {
+            if (_listenNetwork == CONST_ANYNET)
+                return true;
+
             try
             {
-                if (_listenNetwork == CONST_ANYNET)
-                    return true;
-
                 var response = _client.Containers.InspectContainerAsync(containerId).Result;
 
                 var networks = response.NetworkSettings.Networks;
@@ -263,29 +290,29 @@ namespace windows_hosts_writer
         /// Adds the hosts entry to the list for writing later
         /// </summary>
         /// <param name="containerId">The ID of the container to add</param>
-        public static void AddHost(string containerId)
+        public static void AddHost(ContainerListResponse container)
         {
             lock (_hostLock)
             {
-                var hostsValue = GetHostsValue(containerId);
+                //var ip = _listenNetwork == CONST_ANYNET ? container.NetworkSettings.Networks.First().Value.IPAddress : container.NetworkSettings.Networks[_listenNetwork].IPAddress;
 
-                if (string.IsNullOrWhiteSpace(hostsValue))
-                    return;
+                var hostsForContainer = GetHostsValue(container);
 
-                if (!_hostsEntries.ContainsKey(containerId))
+                foreach (var hostsContainerMap in hostsForContainer)
                 {
-
-                    _hostsEntries.Add(containerId, hostsValue);
-                    _isDirty = true;
-
-                    return;
+                    if (!_hostsEntries.ContainsKey(hostsContainerMap.Key))
+                    {
+                        _hostsEntries.Add(hostsContainerMap.Key, hostsForContainer[hostsContainerMap.Key]);
+                    }
+                    else
+                    {
+                        if (!_hostsEntries[hostsContainerMap.Key].SequenceEqual(hostsForContainer[hostsContainerMap.Key]))
+                        {
+                            _hostsEntries[hostsContainerMap.Key].AddRange(hostsForContainer[hostsContainerMap.Key]);
+                        }
+                    }
                 }
 
-                if (_hostsEntries[containerId] != hostsValue)
-                {
-                    _hostsEntries[containerId] = hostsValue;
-                    _isDirty = true;
-                }
             }
         }
 
@@ -293,75 +320,88 @@ namespace windows_hosts_writer
         /// <summary>
         ///  Calculates the appropriate hosts entry using all the aliases and 
         /// </summary>
-        /// <param name="containerId">The ID of the container to calculate</param>
+        /// <param name="container">The container to calculate the names for</param>
         /// <returns></returns>
-        private static string GetHostsValue(string containerId)
+        private static Dictionary<string, List<string>> GetHostsValue(ContainerListResponse container)
         {
-            var containerDetails = _client.Containers.InspectContainerAsync(containerId).Result;
-
-            var hostNames = new List<string> { containerDetails.Config.Hostname };
-
-            var IP = "";
-
-            EndpointSettings network = null;
-
-            //If we care about the actual network or not
-            if (_listenNetwork == CONST_ANYNET)
+            try
             {
-                foreach (var key in containerDetails.NetworkSettings.Networks.Keys)
+
+
+                var containerDetails = _client.Containers.InspectContainerAsync(container.ID).Result;
+
+                var hostNames = new List<string> { containerDetails.Config.Hostname };
+
+                var IP = "";
+
+                EndpointSettings network = null;
+
+                //If we care about the actual network or not
+                if (_listenNetwork == CONST_ANYNET)
                 {
-                    network = containerDetails.NetworkSettings.Networks[key];
+                    foreach (var key in containerDetails.NetworkSettings.Networks.Keys)
+                    {
+                        network = containerDetails.NetworkSettings.Networks[key];
+
+                        if (network.Aliases != null)
+                            hostNames.AddRange(network.Aliases);
+                    }
+                }
+                else
+                {
+                    network = containerDetails.NetworkSettings.Networks[_listenNetwork];
 
                     if (network.Aliases != null)
                         hostNames.AddRange(network.Aliases);
+
                 }
-            }
-            else
-            {
-                network = containerDetails.NetworkSettings.Networks[_listenNetwork];
 
-                if (network.Aliases != null)
-                    hostNames.AddRange(network.Aliases);
+                //Filter these out
+                hostNames = hostNames.Distinct().ToList();
 
-            }
+                //Did we map this elsewhere?
+                var hasMap = false;
 
-            //Filter these out
-            hostNames = hostNames.Distinct().ToList();
-
-            //Did we map this elsewhere?
-            var hasMap = false;
-
-            foreach (var hostName in hostNames)
-            {
-                if (_termMaps.ContainsKey(hostName))
+                foreach (var hostName in hostNames)
                 {
-                    var destName = _termMaps[hostName];
-
-                    var allContainers = _client.Containers.ListContainersAsync(new ContainersListParameters()).Result;
-
-                    foreach (var matchContainer in allContainers)
+                    if (_termMaps.ContainsKey(hostName))
                     {
-                        var keys = GetContainerNames(matchContainer);
+                        var destName = _termMaps[hostName];
 
-                        if (keys.Contains(destName))
+                        var allContainers = _client.Containers.ListContainersAsync(new ContainersListParameters()).Result;
+
+                        foreach (var matchContainer in allContainers)
                         {
-                            IP = matchContainer.NetworkSettings.Networks[matchContainer.NetworkSettings.Networks.First().Key].IPAddress;
+                            var keys = GetContainerNames(matchContainer);
 
-                            if (hasMap)
-                                break;
+                            if (keys.Contains(destName))
+                            {
+                                IP = matchContainer.NetworkSettings.Networks[matchContainer.NetworkSettings.Networks.First().Key].IPAddress;
+
+                                if (hasMap)
+                                    break;
+                            }
+
                         }
-
                     }
                 }
+                hostNames = hostNames.Distinct().ToList();
+
+                //Didn't find anything, we're good!
+                if (string.IsNullOrEmpty(IP))
+                    IP = network.IPAddress;
+
+
+                var results = new Dictionary<string, List<string>>();
+
+                results.Add(IP, hostNames);
+                return results;
             }
-
-            //Didn't find anything, we're good!
-            if (string.IsNullOrEmpty(IP))
-                IP = network.IPAddress;
-
-            var allHosts = string.Join(" ", hostNames);
-
-            return $"{IP}\t{allHosts}\t\t#{containerId} by {GetTail()}";
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
         }
 
         private static readonly object _lockobject = new object();
@@ -391,14 +431,7 @@ namespace windows_hosts_writer
             //Keep some sanity and don't jack with things while in flux.
             lock (_lockobject)
             {
-                //Do what we need, only when we need to.
-                if (!_isDirty)
-                    return;
-
-                //Keep from repeating
-                _isDirty = false;
-
-
+                //1.4 - If we made it this far, we're clear to update
                 if (!File.Exists(_hostsPath))
                 {
                     Log($"Could not find hosts file at: {_hostsPath}");
@@ -419,9 +452,12 @@ namespace windows_hosts_writer
                 });
 
                 //Add the new ones in
-                foreach (var entry in _hostsEntries)
+                foreach (var ip in _hostsEntries.Keys)
                 {
-                    newHostLines.Add(entry.Value);
+                    foreach (var hostName in _hostsEntries[ip].Distinct())
+                    {
+                        newHostLines.Add($"{ip}\t{hostName}\t\t#by {GetTail()}");
+                    }
                 }
 
                 File.WriteAllLines(_hostsPath, newHostLines);
@@ -446,8 +482,8 @@ namespace windows_hosts_writer
 
             _timer.Dispose();
 
-            _hostsEntries = new Dictionary<string, string>();
-            _isDirty = true;
+            _hostsEntries = new Dictionary<string, List<string>>();
+
             WriteHosts();
         }
 

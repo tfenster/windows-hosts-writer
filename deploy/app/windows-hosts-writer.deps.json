@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v3.1": {
-      "windows-hosts-writer/1.0.0": {
+      "windows-hosts-writer/1.1.0": {
         "dependencies": {
           "Newtonsoft.Json": "9.0.1",
           "Docker.Dotnet": "3.125.3.0"
@@ -371,7 +371,7 @@
     }
   },
   "libraries": {
-    "windows-hosts-writer/1.0.0": {
+    "windows-hosts-writer/1.1.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
