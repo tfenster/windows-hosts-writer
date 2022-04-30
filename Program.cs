@@ -490,7 +490,7 @@ namespace windows_hosts_writer
 
         private static void Log(string text)
         {
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss:fff}] {text}");
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}");
         }
     }
 }
