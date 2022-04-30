@@ -2,19 +2,24 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
     <RootNamespace>windows_hosts_writer</RootNamespace>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <Version>1.1.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <Version>2.0.0</Version>
+    <DockerDefaultTargetOS>Windows</DockerDefaultTargetOS>
+    <DockerfileContext>.</DockerfileContext>
+    <DockerfileRunArguments>-v \\.\pipe\docker_engine:\\.\pipe\docker_engine -v c:\Windows\System32\drivers\etc:c:\driversetc</DockerfileRunArguments>
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include=".\lib\Docker.Dotnet.dll" />
-    <PackageReference Include="Newtonsoft.Json" Version="9.0.1" />
+    <PackageReference Include="Docker.DotNet" Version="3.125.5" />
+    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.14.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
   </ItemGroup>
 
   <ItemGroup>
     <Folder Include="deploy\" />
+    <Folder Include="deploy\app\" />
   </ItemGroup>
 
 </Project>
