@@ -26,8 +26,7 @@ services:
       - ASPNETCORE_URLS=http://+:80
     networks:
       default:
-        aliases: 
-          - ${WHOAMI_HOST}
+        aliases: [ "${WHOAMI_HOST}" ]
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.whoami-secure.entrypoints=websecure"
@@ -36,10 +35,14 @@ services:
   whw:
     isolation: ${ISOLATION}
     image: ${WHW_IMAGE}
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ${BASE_IMAGE}
     volumes: 
       - C:\windows\system32\drivers\etc:C:\driversetc
-      - type: npipe
-        source: '\\.\pipe\docker_engine'
-        target: '\\.\pipe\docker_engine'
+      - source: \\.\pipe\docker_engine\
+        target: \\.\pipe\docker_engine\
+        type: npipe
     environment:
         TERMINATION_MAP: whoami:traefik

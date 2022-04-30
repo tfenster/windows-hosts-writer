@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -67,6 +67,7 @@ namespace windows_hosts_writer
 
         static void Main(string[] args)
         {
+            Log("Starting Windows Hosts Writer");
 
             if (Environment.GetEnvironmentVariable(ENV_HOSTPATH) != null)
             {
@@ -95,7 +96,7 @@ namespace windows_hosts_writer
                 var mapValue = Environment.GetEnvironmentVariable(ENV_TERMMAP);
                 if (string.IsNullOrEmpty(mapValue))
                 {
-                    Log($"No termination maps detected.");
+                    Log($"No termination maps detected");
                 }
                 else
                 {
@@ -117,14 +118,15 @@ namespace windows_hosts_writer
                         {
                             if (_termMaps.ContainsKey(mapSource))
                             {
-                                Log($"Skipping DUplicate Source Map '{mapSource}'");
+                                Log($"Skipping Duplicate Source Map '{mapSource}'");
                                 continue;
                             }
+                            Log($"Mapping {mapSource.ToLower()} to {mapDest.ToLower()}");
                             _termMaps.Add(mapSource.ToLower(), mapDest.ToLower());
                         }
                     }
 
-                    Log($"Using {_termMaps.Count} termination maps.");
+                    Log($"Configured {_termMaps.Count} termination map{(_termMaps.Count == 1 ? "" : "s")}");
                 }
             }
 
@@ -150,10 +152,9 @@ namespace windows_hosts_writer
                 return;
             }
 
-            Log("Starting Windows Hosts Writer");
-
             try
             {
+                Log("Scheduling container watcher");
                 _timer = new System.Timers.Timer(_timerPeriod);
                 _timer.Elapsed += (s, e) => { DoUpdate(); };
                 _timer.Start();
@@ -449,8 +450,12 @@ namespace windows_hosts_writer
                 {
                     foreach (var hostName in _hostsEntries[ip].Distinct())
                     {
-                        Log($"Adding {hostName}");
-                        newHostLines.Add($"{ip}\t{hostName}\t\t#by {GetTail()}");
+                        foreach (var splitHostName in hostName.Split(null))
+                        {
+                            var entry = $"{ip}\t{splitHostName}";
+                            Log($"Adding {entry}");
+                            newHostLines.Add($"{entry}\t\t#by {GetTail()}");
+                        }
                     }
                 }
 
