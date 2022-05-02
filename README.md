@@ -16,13 +16,13 @@ Begin by opening `docker-compose.yml` and add the following service:
         type: npipe
 ```
 
-The token `${WHW_IMAGE}` can be configured in the in environment file **.env** like the following:
+The token `${WHW_IMAGE}` can be configured in the environment file **.env** like the following:
 
 ```text
 WHW_IMAGE=rahnemann/windows-hosts-writer:2.0-nanoserver-1809
 ```
 
-With just this you are ready to get started. Spin up your compose file with something like `docker compose up -d whw`.
+With just this you are ready to get started. Spin up your compose file with `docker compose up -d whw`.
 
 Open up your hosts file in **notepad** to check out the the changes.
 
@@ -49,7 +49,7 @@ The `TERMINATION_MAP` environment variable begins with a comma delimitated list 
       TERMINATION_MAP: whoami:traefik
 ```
 
-Additionally, you may wish to add aliases to each of the services. These are great when you want additional hostname bindings mapped to the service. This can be accomplished by adding network aliases to your configuration.
+Additionally, you may wish to add aliases to each of the services. These are great when you want multiple hostname bindings mapped to the service. This can be accomplished by adding network aliases to your configuration.
 
 ```yaml
     networks:
@@ -116,7 +116,7 @@ ISOLATION=default
 WHW_IMAGE=rahnemann/windows-hosts-writer:2.0-nanoserver-1809
 WHOAMI_HOST=whoami.whw.localhost test.whw.localhost
 ```
-Starting up with additional services mapped to **traefik** will result in something like the following:
+Starting up with additional services mapped to **traefik** will result in the following:
 
 ```text
 172.20.231.209	415e2f33d6e0		#by whw
