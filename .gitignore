@@ -1,3 +1,6 @@
 obj
 bin
 .vs/
+
+docker/traefik/certs
+!docker/traefik/certs/.gitkeep

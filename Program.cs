@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 
@@ -66,59 +67,67 @@ namespace windows_hosts_writer
 
         static void Main(string[] args)
         {
+            Log("Starting Windows Hosts Writer");
 
             if (Environment.GetEnvironmentVariable(ENV_HOSTPATH) != null)
             {
                 _hostsPath = Environment.GetEnvironmentVariable(ENV_HOSTPATH);
-                Console.Write($"Overriding hosts path '{_hostsPath}'");
+                Log($"Overriding hosts path '{_hostsPath}'");
             }
 
             if (Environment.GetEnvironmentVariable(ENV_NETWORK) != null)
             {
                 _listenNetwork = Environment.GetEnvironmentVariable(ENV_NETWORK);
-                Console.Write($"Overriding listen network '{_listenNetwork}'");
+                Log($"Overriding listen network '{_listenNetwork}'");
             }
             else
             {
-                Console.WriteLine("Listening to any network");
+                Log("Listening to any network");
             }
 
             if (Environment.GetEnvironmentVariable(ENV_SESSION) != null)
             {
                 _sessionId = Environment.GetEnvironmentVariable(ENV_SESSION);
-                Console.Write($"Overriding Session Key  '{_sessionId}'");
+                Log($"Overriding Session Key  '{_sessionId}'");
             }
 
-            if (Environment.GetEnvironmentVariable(ENV_TERMMAP) != null || true)
+            if (Environment.GetEnvironmentVariable(ENV_TERMMAP) != null)
             {
                 var mapValue = Environment.GetEnvironmentVariable(ENV_TERMMAP);
-                mapValue = "id,cm,cd:traefik";
-                var mapSets = mapValue.Split('|');
-
-                foreach (var mapGroup in mapSets)
+                if (string.IsNullOrEmpty(mapValue))
                 {
-                    var mapSet = mapGroup.Split(":");
+                    Log($"No termination maps detected");
+                }
+                else
+                {
+                    var mapSets = mapValue.Split('|');
 
-                    if (mapSet.Length != 2)
+                    foreach (var mapGroup in mapSets)
                     {
-                        Console.WriteLine($"Malformed MapSet: '{ mapGroup}'. Expected 'source1,source2:dest'.");
-                        continue;
-                    }
+                        var mapSet = mapGroup.Split(":");
 
-                    var mapDest = mapSet[1].Trim();
-
-                    foreach (string mapSource in mapSet[0].Split(",", StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToList())
-                    {
-                        if (_termMaps.ContainsKey(mapSource))
+                        if (mapSet.Length != 2)
                         {
-                            Console.WriteLine($"Skipping DUplicate Source Map '{mapSource}'");
+                            Log($"Malformed MapSet: '{ mapGroup}'. Expected 'source1,source2:dest'.");
                             continue;
                         }
-                        _termMaps.Add(mapSource.ToLower(), mapDest.ToLower());
-                    }
-                }
 
-                Console.Write($"Using {_termMaps.Count} termination maps.");
+                        var mapDest = mapSet[1].Trim();
+
+                        foreach (string mapSource in mapSet[0].Split(",", StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToList())
+                        {
+                            if (_termMaps.ContainsKey(mapSource))
+                            {
+                                Log($"Skipping Duplicate Source Map '{mapSource}'");
+                                continue;
+                            }
+                            Log($"Mapping {mapSource.ToLower()} to {mapDest.ToLower()}");
+                            _termMaps.Add(mapSource.ToLower(), mapDest.ToLower());
+                        }
+                    }
+
+                    Log($"Configured {_termMaps.Count} termination map{(_termMaps.Count == 1 ? "" : "s")}");
+                }
             }
 
             try
@@ -127,8 +136,7 @@ namespace windows_hosts_writer
             }
             catch (Exception ex)
             {
-                Log(
-                    $"Something went wrong. Likely the Docker engine is not listening at [{_client.Configuration.EndpointBaseUri}] inside of the container.");
+                Log($"Something went wrong. Likely the Docker engine is not listening at [{_client.Configuration.EndpointBaseUri}] inside of the container.");
                 Log($"You can change that path through environment variable '{ENV_ENDPOINT}'");
 
                 Log("Exception is " + ex.Message);
@@ -144,18 +152,12 @@ namespace windows_hosts_writer
                 return;
             }
 
-            Log("Starting Windows Hosts Writer");
-
-
-
             try
             {
+                Log("Scheduling container watcher");
                 _timer = new System.Timers.Timer(_timerPeriod);
-
                 _timer.Elapsed += (s, e) => { DoUpdate(); };
-
                 _timer.Start();
-                //_timer = new Timer((s) => DoUpdate(), null, 0, _timerPeriod);
 
                 var shutdown = new ManualResetEvent(false);
                 var complete = new ManualResetEventSlim();
@@ -195,12 +197,7 @@ namespace windows_hosts_writer
             }
         }
 
-        private static void _timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
-        {
-            throw new NotImplementedException();
-        }
-
-        public static void DoUpdate()
+        public static async void DoUpdate()
         {
             _timer.Stop();
 
@@ -224,11 +221,11 @@ namespace windows_hosts_writer
             }
 
             //Handle already running containers on the network
-            var containers = _client.Containers.ListContainersAsync(containerListParams).Result;
+            var containers = await _client.Containers.ListContainersAsync(containerListParams);
 
             foreach (var container in containers)
             {
-                if (ShouldProcessContainer(container.ID))
+                if (await ShouldProcessContainer(container.ID))
                     AddHost(container);
             }
 
@@ -263,19 +260,18 @@ namespace windows_hosts_writer
         }
 
         //Checks whether the container needs to be added to the list or not.  Has to be on the right network
-        public static bool ShouldProcessContainer(string containerId)
+        public static async Task<bool> ShouldProcessContainer(string containerId)
         {
             if (_listenNetwork == CONST_ANYNET)
                 return true;
 
             try
             {
-                var response = _client.Containers.InspectContainerAsync(containerId).Result;
+                var response = await _client.Containers.InspectContainerAsync(containerId);
 
                 var networks = response.NetworkSettings.Networks;
 
                 return networks.TryGetValue(_listenNetwork, out _);
-
             }
             catch (Exception e)
             {
@@ -294,8 +290,6 @@ namespace windows_hosts_writer
         {
             lock (_hostLock)
             {
-                //var ip = _listenNetwork == CONST_ANYNET ? container.NetworkSettings.Networks.First().Value.IPAddress : container.NetworkSettings.Networks[_listenNetwork].IPAddress;
-
                 var hostsForContainer = GetHostsValue(container);
 
                 foreach (var hostsContainerMap in hostsForContainer)
@@ -312,7 +306,6 @@ namespace windows_hosts_writer
                         }
                     }
                 }
-
             }
         }
 
@@ -326,13 +319,11 @@ namespace windows_hosts_writer
         {
             try
             {
-
-
                 var containerDetails = _client.Containers.InspectContainerAsync(container.ID).Result;
 
                 var hostNames = new List<string> { containerDetails.Config.Hostname };
 
-                var IP = "";
+                var ip = "";
 
                 EndpointSettings network = null;
 
@@ -353,7 +344,6 @@ namespace windows_hosts_writer
 
                     if (network.Aliases != null)
                         hostNames.AddRange(network.Aliases);
-
                 }
 
                 //Filter these out
@@ -364,37 +354,40 @@ namespace windows_hosts_writer
 
                 foreach (var hostName in hostNames)
                 {
-                    if (_termMaps.ContainsKey(hostName))
+                    if (!_termMaps.ContainsKey(hostName))
                     {
-                        var destName = _termMaps[hostName];
+                        continue;
+                    }
 
-                        var allContainers = _client.Containers.ListContainersAsync(new ContainersListParameters()).Result;
+                    var destName = _termMaps[hostName];
 
-                        foreach (var matchContainer in allContainers)
+                    var allContainers = _client.Containers.ListContainersAsync(new ContainersListParameters()).Result;
+
+                    foreach (var matchContainer in allContainers)
+                    {
+                        var keys = GetContainerNames(matchContainer);
+
+                        if (!keys.Contains(destName))
                         {
-                            var keys = GetContainerNames(matchContainer);
-
-                            if (keys.Contains(destName))
-                            {
-                                IP = matchContainer.NetworkSettings.Networks[matchContainer.NetworkSettings.Networks.First().Key].IPAddress;
-
-                                if (hasMap)
-                                    break;
-                            }
-
+                            continue;
                         }
+
+                        ip = matchContainer.NetworkSettings.Networks[matchContainer.NetworkSettings.Networks.First().Key].IPAddress;
+
+                        if (hasMap)
+                            break;
                     }
                 }
+
                 hostNames = hostNames.Distinct().ToList();
 
                 //Didn't find anything, we're good!
-                if (string.IsNullOrEmpty(IP))
-                    IP = network.IPAddress;
-
+                if (string.IsNullOrEmpty(ip))
+                    ip = network.IPAddress;
 
                 var results = new Dictionary<string, List<string>>();
 
-                results.Add(IP, hostNames);
+                results.Add(ip, hostNames);
                 return results;
             }
             catch (Exception e)
@@ -442,6 +435,7 @@ namespace windows_hosts_writer
 
                 var newHostLines = new List<string>();
 
+                Log("Refreshing entries in hosts file");
                 //Purge the old ones out
                 hostsLines.ForEach(l =>
                 {
@@ -456,7 +450,12 @@ namespace windows_hosts_writer
                 {
                     foreach (var hostName in _hostsEntries[ip].Distinct())
                     {
-                        newHostLines.Add($"{ip}\t{hostName}\t\t#by {GetTail()}");
+                        foreach (var splitHostName in hostName.Split(null))
+                        {
+                            var entry = $"{ip}\t{splitHostName}";
+                            Log($"Adding {entry}");
+                            newHostLines.Add($"{entry}\t\t#by {GetTail()}");
+                        }
                     }
                 }
 
@@ -496,7 +495,7 @@ namespace windows_hosts_writer
 
         private static void Log(string text)
         {
-            Console.WriteLine($"{DateTime.Now:HH:mm:ss:fff}: {text}");
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}");
         }
     }
 }
