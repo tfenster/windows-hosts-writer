@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "windows-hosts-writer": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}
